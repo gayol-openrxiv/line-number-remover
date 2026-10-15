@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Line number stripper</title>
+<style>
+  :root{
+    --page:#E9ECEE;
+    --sheet:#FFFFFF;
+    --ink:#18222D;
+    --ink-soft:#5C6874;
+    --rule:#C7D0D8;
+    --pencil:#1D4E89;
+    --pencil-soft:#DCE6F1;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{
+    background:var(--page);
+    color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:15px;
+    line-height:1.5;
+    padding:32px 24px 56px;
+  }
+  .wrap{max-width:1140px;margin:0 auto;}
+
+  header{margin-bottom:26px;}
+  h1{
+    font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    font-size:29px;
+    font-weight:600;
+    letter-spacing:-0.01em;
+    margin:0 0 4px;
+  }
+  header p{margin:0;color:var(--ink-soft);max-width:62ch;}
+
+  .settings{
+    display:flex;
+    flex-wrap:wrap;
+    gap:6px 22px;
+    padding:14px 18px;
+    background:var(--sheet);
+    border:1px solid var(--rule);
+    border-radius:3px;
+    margin-bottom:18px;
+  }
+  .settings label{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    cursor:pointer;
+    color:var(--ink);
+  }
+  input[type=checkbox]{
+    width:15px;height:15px;
+    accent-color:var(--pencil);
+    margin:0;
+    cursor:pointer;
+  }
+
+  .panes{display:grid;grid-template-columns:1fr 1fr;gap:18px;}
+  .pane{
+    background:var(--sheet);
+    border:1px solid var(--rule);
+    border-radius:3px;
+    display:flex;
+    flex-direction:column;
+    min-width:0;
+  }
+  .pane-head{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    gap:12px;
+    padding:11px 14px 9px;
+    border-bottom:1px solid var(--rule);
+  }
+  .pane-head h2{
+    margin:0;
+    font-size:13.5px;
+    font-weight:600;
+    color:var(--ink-soft);
+  }
+  textarea{
+    flex:1;
+    width:100%;
+    min-height:52vh;
+    border:0;
+    resize:vertical;
+    padding:16px 18px;
+    background:transparent;
+    color:var(--ink);
+    font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    font-size:15.5px;
+    line-height:1.65;
+  }
+  textarea:focus{outline:2px solid var(--pencil);outline-offset:-2px;}
+  #out{background:#FCFDFE;}
+
+  .btn{
+    font:inherit;
+    font-size:13px;
+    color:var(--pencil);
+    background:var(--pencil-soft);
+    border:1px solid #BACDE2;
+    border-radius:3px;
+    padding:3px 11px;
+    cursor:pointer;
+  }
+  .btn:hover{background:#CFDEEE;}
+  .btn:focus-visible{outline:2px solid var(--pencil);outline-offset:2px;}
+  .btn.ghost{background:transparent;border-color:var(--rule);color:var(--ink-soft);}
+  .btn.ghost:hover{background:#F1F3F5;}
+
+  .status{
+    margin-top:16px;
+    padding-left:12px;
+    border-left:3px solid var(--pencil);
+    color:var(--ink-soft);
+    min-height:1.5em;
+  }
+  .status b{color:var(--ink);font-weight:600;}
+
+  @media (max-width:820px){
+    body{padding:22px 14px 40px;}
+    .panes{grid-template-columns:1fr;}
+    textarea{min-height:34vh;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Line number stripper</h1>
+    <p>Paste line-numbered text. The numbers come off, the broken lines go back together.</p>
+  </header>
+
+  <div class="settings">
+    <label><input type="checkbox" id="optJoin" checked> Rejoin wrapped lines into paragraphs</label>
+    <label><input type="checkbox" id="optHead" checked> Keep short lines (headings) separate</label>
+    <label><input type="checkbox" id="optPage" checked> Drop stray page numbers</label>
+    <label><input type="checkbox" id="optHyphen" checked> Keep hyphens in split words</label>
+    <label><input type="checkbox" id="optForce"> Strip trailing numbers even if unsequenced</label>
+  </div>
+
+  <div class="panes">
+    <div class="pane">
+      <div class="pane-head">
+        <h2>Pasted text</h2>
+        <button class="btn ghost" id="clear" type="button">Clear</button>
+      </div>
+      <textarea id="in" spellcheck="false" placeholder="Paste here…"></textarea>
+    </div>
+    <div class="pane">
+      <div class="pane-head">
+        <h2>Cleaned text</h2>
+        <button class="btn" id="copy" type="button">Copy</button>
+      </div>
+      <textarea id="out" spellcheck="false" placeholder="Cleaned text appears here."></textarea>
+    </div>
+  </div>
+
+  <p class="status" id="status">Nothing to clean yet.</p>
+
+</div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var inEl = $('in'), outEl = $('out'), statusEl = $('status');
+  var opts = ['optJoin','optHead','optPage','optHyphen','optForce'].map($);
+
+  var TRAIL = /(\d{1,6})[ \t]*$/;
+  var LEAD  = /^[ \t]*(\d{1,6})/;
+
+  function candidates(lines, side){
+    return lines.map(function(l){
+      var m = (side === 'end') ? l.match(TRAIL) : l.match(LEAD);
+      return m ? parseInt(m[1], 10) : null;
+    });
+  }
+
+  // Walk forward from a starting line, following an ascending run of numbers.
+  function run(nums, start){
+    var expected = nums[start], marks = {}, count = 0;
+    for(var j = start; j < nums.length; j++){
+      var n = nums[j];
+      if(n !== null && (n === expected || n === expected + 1)){
+        marks[j] = true;
+        expected = n + 1;
+        count++;
+      }
+    }
+    return { count: count, marks: marks };
+  }
+
+  function bestRun(nums){
+    var best = { count: 0, marks: {} }, tried = 0;
+    for(var i = 0; i < nums.length && tried < 25; i++){
+      if(nums[i] === null) continue;
+      tried++;
+      var r = run(nums, i);
+      if(r.count > best.count) best = r;
+    }
+    return best;
+  }
+
+  function strip(line, side){
+    return (side === 'end' ? line.replace(TRAIL, '') : line.replace(LEAD, '')).trim();
+  }
+
+  function clean(raw){
+    var join    = $('optJoin').checked,
+        heads   = $('optHead').checked,
+        pages   = $('optPage').checked,
+        hyphens = $('optHyphen').checked,
+        force   = $('optForce').checked;
+
+    var lines = raw.replace(/\r\n?/g, '\n').split('\n');
+    var endRun  = bestRun(candidates(lines, 'end'));
+    var leadRun = bestRun(candidates(lines, 'start'));
+    var side = (leadRun.count > endRun.count) ? 'start' : 'end';
+    var picked = (side === 'start') ? leadRun : endRun;
+    var marks = picked.count >= 2 ? picked.marks : {};
+
+    var removed = [], droppedPages = 0, kept = [];
+
+    lines.forEach(function(line, i){
+      var isNumbered = !!marks[i];
+      if(!isNumbered && force && side === 'end' && TRAIL.test(line) && line.trim() !== ''){
+        isNumbered = true;
+      }
+      var text = line;
+      if(isNumbered){
+        var m = (side === 'end') ? line.match(TRAIL) : line.match(LEAD);
+        if(m) removed.push(parseInt(m[1], 10));
+        text = strip(line, side);
+      } else {
+        text = line.trim();
+        if(pages && /^\d{1,4}$/.test(text)){
+          droppedPages++;
+          return;
+        }
+      }
+      kept.push(text);
+    });
+
+    if(!join) return { text: kept.join('\n').replace(/\n{3,}/g, '\n\n').trim(), removed: removed, pages: droppedPages, side: side };
+
+    // Group into blocks on blank lines, then reflow each block.
+    var blocks = [], cur = [];
+    kept.forEach(function(t){
+      if(t === ''){ if(cur.length){ blocks.push(cur); cur = []; } }
+      else cur.push(t);
+    });
+    if(cur.length) blocks.push(cur);
+
+    var paras = [];
+    blocks.forEach(function(block){
+      var lens = block.map(function(l){ return l.length; }).slice().sort(function(a,b){ return a-b; });
+      var median = lens[Math.floor(lens.length / 2)] || 0;
+      var buf = [];
+
+      function flush(){
+        if(!buf.length) return;
+        var out = buf[0];
+        for(var k = 1; k < buf.length; k++){
+          if(/-$/.test(out)) out = hyphens ? out + buf[k] : out.replace(/-$/, '') + buf[k];
+          else out += ' ' + buf[k];
+        }
+        paras.push(out.replace(/[ \t]{2,}/g, ' ').trim());
+        buf = [];
+      }
+
+      block.forEach(function(line, i){
+        var isHeading = heads &&
+          i < block.length - 1 &&
+          line.length < Math.max(0.72 * median, 12) &&
+          !/[.,;:?!…"'’”)\-]$/.test(line) &&
+          /^["'“(]?[A-Z0-9]/.test(block[i + 1]);
+        if(isHeading){
+          flush();
+          paras.push(line);
+        } else {
+          buf.push(line);
+        }
+      });
+      flush();
+    });
+
+    return { text: paras.join('\n\n').trim(), removed: removed, pages: droppedPages, side: side };
+  }
+
+  function render(){
+    var raw = inEl.value;
+    if(!raw.trim()){
+      outEl.value = '';
+      statusEl.textContent = 'Nothing to clean yet.';
+      return;
+    }
+    var r = clean(raw);
+    outEl.value = r.text;
+
+    var bits = [];
+    if(r.removed.length){
+      var lo = Math.min.apply(null, r.removed), hi = Math.max.apply(null, r.removed);
+      bits.push('<b>' + r.removed.length + '</b> line number' + (r.removed.length === 1 ? '' : 's') +
+                ' removed (' + lo + '–' + hi + ', found at the ' + (r.side === 'end' ? 'end' : 'start') + ' of each line)');
+    } else {
+      bits.push('No numbered sequence found — nothing stripped');
+    }
+    if(r.pages) bits.push('<b>' + r.pages + '</b> stray page number' + (r.pages === 1 ? '' : 's') + ' dropped');
+    var words = r.text.split(/\s+/).filter(Boolean).length;
+    bits.push('<b>' + words.toLocaleString() + '</b> words out');
+    statusEl.innerHTML = bits.join(' · ');
+  }
+
+  inEl.addEventListener('input', render);
+  opts.forEach(function(o){ o.addEventListener('change', render); });
+
+  $('clear').addEventListener('click', function(){
+    inEl.value = '';
+    render();
+    inEl.focus();
+  });
+
+  $('copy').addEventListener('click', function(){
+    var btn = this;
+    if(!outEl.value) return;
+    var done = function(){
+      btn.textContent = 'Copied';
+      setTimeout(function(){ btn.textContent = 'Copy'; }, 1400);
+    };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(outEl.value).then(done, fallback);
+    } else fallback();
+    function fallback(){
+      outEl.select();
+      try{ document.execCommand('copy'); done(); }
+      catch(e){ btn.textContent = 'Press ⌘/Ctrl+C'; setTimeout(function(){ btn.textContent = 'Copy'; }, 2200); }
+    }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
